@@ -91,7 +91,7 @@ class TranslationWorker(QThread):
             for row in range(total_rows):
                 original_text = self.table.item(row, 1).text()
                 if original_text:
-                    prompt = f"Translate this text to {self.target_language}: {original_text}"
+                    prompt = f"Translate this text to {self.target_language} without articulation: {original_text}"
                     response = self.model.generate_content(prompt)
                     translated_text = response.text
                     self.translated.emit(row, translated_text)
