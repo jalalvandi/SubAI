@@ -1,13 +1,14 @@
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, 
                              QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QProgressDialog, QDialog, 
                              QLineEdit, QFormLayout, QMenuBar)
-from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtGui import QFont, QPalette, QColor, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import sys
 import pysrt
 import google.generativeai as genai
 import os
 import json
+import time
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -15,6 +16,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.setGeometry(200, 200, 400, 250)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
+        self.setWindowIcon(QIcon("logo.png"))
 
         layout = QFormLayout()
 
@@ -65,12 +67,87 @@ class SettingsDialog(QDialog):
             }
         }
         try:
+            with open('config.json', 'r') as config_file:
+                existing_config = json.load(config_file)
+            config.update({k: v for k, v in existing_config.items() if k not in config})
+        except FileNotFoundError:
+            pass
+        try:
             with open('config.json', 'w') as config_file:
                 json.dump(config, config_file, indent=4)
             QMessageBox.information(self, "Success", "Settings saved successfully!")
             self.accept()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error saving settings: {str(e)}")
+
+class AdvancedSettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Advanced Settings")
+        self.setGeometry(200, 200, 400, 200)
+        self.setStyleSheet("background-color: #2c3e50; color: white;")
+        self.setWindowIcon(QIcon("logo.png"))
+
+        layout = QFormLayout()
+
+        self.rpm_input = QLineEdit(self)
+        self.rpm_input.setStyleSheet("background-color: #34495e; color: white; padding: 5px; border-radius: 5px;")
+        self.rpm_input.setFont(QFont("Tahoma", 10))
+        self.rpm_input.setText("15")  # Default to 15 RPM
+        layout.addRow("Requests per Minute (RPM):", self.rpm_input)
+
+        self.model_combo = QComboBox(self)
+        self.model_combo.setStyleSheet("background-color: #34495e; color: white; padding: 6px; border-radius: 5px;")
+        self.model_combo.setFont(QFont("Tahoma", 10))
+        self.model_combo.addItems(["gemini-1.5-flash"])  # Add more models here if needed
+        layout.addRow("Model:", self.model_combo)
+
+        self.save_button = QPushButton("Save Advanced Settings")
+        self.save_button.setFont(QFont("Tahoma", 10))
+        self.save_button.setStyleSheet("background-color: #27ae60; color: white; padding: 10px; border-radius: 8px;")
+        self.save_button.clicked.connect(self.save_settings)
+        layout.addWidget(self.save_button)
+
+        self.setLayout(layout)
+        self.load_existing_settings()
+
+    def load_existing_settings(self):
+        # Load existing advanced settings from config.json if it exists
+        try:
+            if os.path.exists('config.json'):
+                with open('config.json', 'r') as config_file:
+                    config = json.load(config_file)
+                self.rpm_input.setText(str(config.get('rpm', 15)))
+                model = config.get('model', 'gemini-1.5-flash')
+                if model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
+                    self.model_combo.setCurrentText(model)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error loading advanced settings: {str(e)}")
+
+    def save_settings(self):
+        # Save advanced settings to config.json
+        try:
+            rpm = int(self.rpm_input.text())
+            if rpm <= 0:
+                raise ValueError("RPM must be a positive number!")
+            config = {
+                "rpm": rpm,
+                "model": self.model_combo.currentText()
+            }
+            try:
+                with open('config.json', 'r') as config_file:
+                    existing_config = json.load(config_file)
+                config.update({k: v for k, v in existing_config.items() if k not in config})
+            except FileNotFoundError:
+                pass
+            with open('config.json', 'w') as config_file:
+                json.dump(config, config_file, indent=4)
+            QMessageBox.information(self, "Success", "Advanced settings saved successfully!")
+            self.accept()
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Error saving advanced settings: {str(e)}")
 
 class TranslationWorker(QThread):
     progress = pyqtSignal(int)
@@ -82,20 +159,26 @@ class TranslationWorker(QThread):
         super().__init__()
         self.table = table
         self.target_language = target_language
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        with open('config.json', 'r') as config_file:
+            config = json.load(config_file)
+        self.model = genai.GenerativeModel(config.get('model', 'gemini-1.5-flash'))
+        self.rpm = config.get('rpm', 15)  # Default to 15 RPM if not set
+        self.delay = 60 / self.rpm  # Calculate delay in seconds
 
     def run(self):
-        # Run translation in a separate thread
+        # Run translation in a separate thread with rate limiting
         try:
             total_rows = self.table.rowCount()
             for row in range(total_rows):
                 original_text = self.table.item(row, 1).text()
                 if original_text:
-                    prompt = f"Translate this text to {self.target_language} without articulation: {original_text}"
+                    prompt = f"Translate this text to {self.target_language}: {original_text}"
                     response = self.model.generate_content(prompt)
                     translated_text = response.text
                     self.translated.emit(row, translated_text)
                 self.progress.emit(row + 1)
+                if row < total_rows - 1:  # No delay after the last request
+                    time.sleep(self.delay)  # Respect the RPM limit
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
@@ -132,6 +215,7 @@ class SubtitleTranslatorApp(QWidget):
         self.setWindowTitle("Subtitle Translator")
         self.setGeometry(300, 200, 900, 600)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
+        self.setWindowIcon(QIcon("logo.png"))
 
         # Add menu bar
         menu_bar = QMenuBar(self)
@@ -139,6 +223,8 @@ class SubtitleTranslatorApp(QWidget):
         file_menu = menu_bar.addMenu("File")
         settings_action = file_menu.addAction("Settings")
         settings_action.triggered.connect(self.open_settings_dialog)
+        advanced_settings_action = file_menu.addAction("Advanced Settings")
+        advanced_settings_action.triggered.connect(self.open_advanced_settings_dialog)
 
         main_layout = QVBoxLayout()
         main_layout.setMenuBar(menu_bar)
@@ -183,10 +269,15 @@ class SubtitleTranslatorApp(QWidget):
         self.setLayout(main_layout)
 
     def open_settings_dialog(self):
-        # Open the settings dialog
+        # Open the basic settings dialog
         dialog = SettingsDialog(self)
         dialog.exec_()
         self.load_config()
+
+    def open_advanced_settings_dialog(self):
+        # Open the advanced settings dialog
+        dialog = AdvancedSettingsDialog(self)
+        dialog.exec_()
 
     def select_file(self):
         # Select and load an SRT file
