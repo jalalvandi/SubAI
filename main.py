@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, 
-                             QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QProgressDialog, QDialog, 
-                             QLineEdit, QFormLayout, QMenuBar)
+                             QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QProgressBar, QDialog, 
+                             QLineEdit, QFormLayout, QMenuBar, QHBoxLayout)
 from PyQt5.QtGui import QFont, QPalette, QColor, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import sys
@@ -154,40 +154,54 @@ class TranslationWorker(QThread):
     finished = pyqtSignal()
     translated = pyqtSignal(int, str)
     error = pyqtSignal(str)
+    canceled = pyqtSignal()
 
-    def __init__(self, table, target_language):
+    def __init__(self, table, target_language, start_row=0):
         super().__init__()
         self.table = table
         self.target_language = target_language
+        self.start_row = start_row  # Starting row for translation
         with open('config.json', 'r') as config_file:
             config = json.load(config_file)
         self.model = genai.GenerativeModel(config.get('model', 'gemini-1.5-flash'))
         self.rpm = config.get('rpm', 15)  # Default to 15 RPM if not set
         self.delay = 60 / self.rpm  # Calculate delay in seconds
+        self.is_canceled = False
+        self.current_row = start_row  # Track current row for cancellation
 
     def run(self):
         # Run translation in a separate thread with rate limiting
         try:
             total_rows = self.table.rowCount()
-            for row in range(total_rows):
+            for row in range(self.start_row, total_rows):
+                if self.is_canceled:
+                    self.canceled.emit()
+                    return
                 original_text = self.table.item(row, 1).text()
                 if original_text:
-                    prompt = f"Translate this text to {self.target_language}: {original_text}"
+                    prompt = f"Translate this text to {self.target_language} and return only the translated text without any explanation or additional content: {original_text}"
                     response = self.model.generate_content(prompt)
                     translated_text = response.text
                     self.translated.emit(row, translated_text)
                 self.progress.emit(row + 1)
+                self.current_row = row + 1
                 if row < total_rows - 1:  # No delay after the last request
                     time.sleep(self.delay)  # Respect the RPM limit
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
 
+    def cancel(self):
+        # Cancel the translation process
+        self.is_canceled = True
+
 class SubtitleTranslatorApp(QWidget):
     def __init__(self):
         super().__init__()
         self.load_config()
         self.initUI()
+        self.worker = None
+        self.last_processed_row = 0  # Track the last processed row for resuming
 
     def load_config(self):
         # Load configuration from config.json or prompt for settings
@@ -249,6 +263,12 @@ class SubtitleTranslatorApp(QWidget):
         self.language_combo.addItems(["English", "French", "German", "Spanish", "Persian", "Chinese", "Japanese"])
         main_layout.addWidget(self.language_combo)
 
+        # Label to display the current file name
+        self.file_name_label = QLabel("No file selected")
+        self.file_name_label.setFont(QFont("Tahoma", 10))
+        self.file_name_label.setStyleSheet("color: #ecf0f1;")
+        main_layout.addWidget(self.file_name_label)
+
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Time", "Original", "Translated"])
@@ -260,13 +280,56 @@ class SubtitleTranslatorApp(QWidget):
         self.table.setFont(QFont("Tahoma", 10))
         main_layout.addWidget(self.table)
 
-        self.btn_translate = QPushButton("Translate and Save")
+        self.btn_translate = QPushButton("Start Translate")
         self.btn_translate.setFont(QFont("Tahoma", 10))
         self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
         self.btn_translate.clicked.connect(self.translate_subtitle)
         main_layout.addWidget(self.btn_translate)
 
+        # Progress bar and control buttons layout
+        self.progress_layout = QHBoxLayout()
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setFont(QFont("Tahoma", 10))
+        self.progress_bar.setVisible(False)
+        self.progress_layout.addWidget(self.progress_bar)
+
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setFont(QFont("Tahoma", 10))
+        self.btn_stop.setStyleSheet("background-color: #e74c3c; color: white; padding: 10px; border-radius: 8px;")
+        self.btn_stop.clicked.connect(self.stop_translation)
+        self.btn_stop.setVisible(False)
+        self.progress_layout.addWidget(self.btn_stop)
+
+        self.btn_resume = QPushButton("Resume")
+        self.btn_resume.setFont(QFont("Tahoma", 10))
+        self.btn_resume.setStyleSheet("background-color: #27ae60; color: white; padding: 10px; border-radius: 8px;")
+        self.btn_resume.clicked.connect(self.resume_translation)
+        self.btn_resume.setVisible(False)
+        self.progress_layout.addWidget(self.btn_resume)
+
+        self.btn_save_partial = QPushButton("Save")
+        self.btn_save_partial.setFont(QFont("Tahoma", 10))
+        self.btn_save_partial.setStyleSheet("background-color: #2980b9; color: white; padding: 10px; border-radius: 8px;")
+        self.btn_save_partial.clicked.connect(self.save_translated_file)
+        self.btn_save_partial.setVisible(False)
+        self.progress_layout.addWidget(self.btn_save_partial)
+
+        main_layout.addLayout(self.progress_layout)
         self.setLayout(main_layout)
+
+    def reset_translation_state(self):
+        # Reset the translation state when a new file is loaded
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel()
+        self.worker = None
+        self.last_processed_row = 0  # Reset last processed row
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        self.btn_stop.setVisible(False)
+        self.btn_resume.setVisible(False)
+        self.btn_save_partial.setVisible(False)
+        self.btn_translate.setEnabled(True)
+        self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
 
     def open_settings_dialog(self):
         # Open the basic settings dialog
@@ -280,7 +343,8 @@ class SubtitleTranslatorApp(QWidget):
         dialog.exec_()
 
     def select_file(self):
-        # Select and load an SRT file
+        # Select and load an SRT file, reset translation state
+        self.reset_translation_state()
         try:
             options = QFileDialog.Options()
             file_path, _ = QFileDialog.getOpenFileName(self, "Select Subtitle File", "", "Subtitle Files (*.srt)", options=options)
@@ -293,11 +357,17 @@ class SubtitleTranslatorApp(QWidget):
                     self.table.setItem(i, 0, QTableWidgetItem(f"{sub.start} --> {sub.end}"))
                     self.table.setItem(i, 1, QTableWidgetItem(sub.text))
                     self.table.setItem(i, 2, QTableWidgetItem(""))
+                # Update file name label
+                self.file_name_label.setText(f"Current file: {os.path.basename(file_path)}")
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading subtitle file: {str(e)}")
+            self.file_name_label.setText("No file selected")
 
     def translate_subtitle(self):
         # Start the translation process
+        if self.worker and self.worker.isRunning():
+            return  # Prevent restarting if translation is already in progress
+
         target_language = self.language_combo.currentText()
         total_rows = self.table.rowCount()
         
@@ -305,20 +375,57 @@ class SubtitleTranslatorApp(QWidget):
             QMessageBox.warning(self, "Error", "No subtitles selected for translation!")
             return
 
-        self.progress_dialog = QProgressDialog("Translating...", "Cancel", 0, total_rows, self)
-        self.progress_dialog.setWindowModality(Qt.WindowModal)
-        self.progress_dialog.setMinimumDuration(0)
+        self.progress_bar.setMaximum(total_rows)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.btn_stop.setVisible(True)
+        self.btn_resume.setVisible(False)
+        self.btn_save_partial.setVisible(False)
+        self.btn_translate.setEnabled(False)
+        self.btn_translate.setStyleSheet("background-color: #7f8c8d; color: white; padding: 12px; border-radius: 8px;")
 
         self.worker = TranslationWorker(self.table, target_language)
         self.worker.progress.connect(self.update_progress)
         self.worker.translated.connect(self.update_translation)
         self.worker.finished.connect(self.on_translation_finished)
         self.worker.error.connect(self.on_translation_error)
+        self.worker.canceled.connect(self.on_translation_canceled)
         self.worker.start()
 
+    def resume_translation(self):
+        # Resume the translation process from the last processed row
+        if self.worker and self.worker.isRunning():
+            return  # Prevent restarting if translation is already in progress
+
+        target_language = self.language_combo.currentText()
+        total_rows = self.table.rowCount()
+        
+        self.progress_bar.setMaximum(total_rows)
+        self.progress_bar.setValue(self.last_processed_row)
+        self.progress_bar.setVisible(True)
+        self.btn_stop.setVisible(True)
+        self.btn_resume.setVisible(False)
+        self.btn_save_partial.setVisible(False)
+        self.btn_translate.setEnabled(False)
+        self.btn_translate.setStyleSheet("background-color: #7f8c8d; color: white; padding: 12px; border-radius: 8px;")
+
+        self.worker = TranslationWorker(self.table, target_language, self.last_processed_row)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.translated.connect(self.update_translation)
+        self.worker.finished.connect(self.on_translation_finished)
+        self.worker.error.connect(self.on_translation_error)
+        self.worker.canceled.connect(self.on_translation_canceled)
+        self.worker.start()
+
+    def stop_translation(self):
+        # Stop the ongoing translation
+        if self.worker:
+            self.worker.cancel()
+            self.last_processed_row = self.worker.current_row  # Save the current row when stopping
+
     def update_progress(self, value):
-        # Update the progress dialog
-        self.progress_dialog.setValue(value)
+        # Update the progress bar
+        self.progress_bar.setValue(value)
 
     def update_translation(self, row, text):
         # Update the translated text in the table
@@ -326,14 +433,38 @@ class SubtitleTranslatorApp(QWidget):
 
     def on_translation_finished(self):
         # Handle translation completion
-        self.progress_dialog.close()
+        self.progress_bar.setVisible(False)
+        self.btn_stop.setVisible(False)
+        self.btn_resume.setVisible(False)
+        self.btn_save_partial.setVisible(False)
+        self.btn_translate.setEnabled(True)
+        self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
         self.save_translated_file()
         QMessageBox.information(self, "Success", "Subtitles translated successfully!")
+        self.worker = None
+        self.last_processed_row = 0  # Reset after completion
+
+    def on_translation_canceled(self):
+        # Handle translation cancellation
+        self.progress_bar.setVisible(True)
+        self.btn_stop.setVisible(False)
+        self.btn_resume.setVisible(True)
+        self.btn_save_partial.setVisible(True)
+        self.btn_translate.setEnabled(True)
+        self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
+        self.worker = None
 
     def on_translation_error(self, error_message):
         # Handle translation errors
-        self.progress_dialog.close()
+        self.progress_bar.setVisible(False)
+        self.btn_stop.setVisible(False)
+        self.btn_resume.setVisible(False)
+        self.btn_save_partial.setVisible(False)
+        self.btn_translate.setEnabled(True)
+        self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
         QMessageBox.warning(self, "Error", f"Translation error: {error_message}")
+        self.worker = None
+        self.last_processed_row = 0  # Reset on error
 
     def save_translated_file(self):
         # Save the translated subtitles to a file
