@@ -103,7 +103,16 @@ class AdvancedSettingsDialog(QDialog):
         self.model_combo = QComboBox(self)
         self.model_combo.setStyleSheet("background-color: #34495e; color: white; padding: 6px; border-radius: 5px;")
         self.model_combo.setFont(QFont("Tahoma", 10))
-        self.model_combo.addItems(["gemini-1.5-flash"])
+        # Display names for user, mapped to API-compatible names
+        self.model_display_names = [
+            "Gemini 1.5 Flash",
+            "Gemini 2.0 Flash"
+        ]
+        self.model_api_names = {
+            "Gemini 1.5 Flash": "gemini-1.5-flash",
+            "Gemini 2.0 Flash": "gemini-2.0-flash"
+        }
+        self.model_combo.addItems(self.model_display_names)
         layout.addRow("Model:", self.model_combo)
 
         self.cache_combo = QComboBox(self)
@@ -139,8 +148,10 @@ class AdvancedSettingsDialog(QDialog):
             conn.close()
             self.rpm_input.setText(settings.get('rpm', '15'))
             model = settings.get('model', 'gemini-1.5-flash')
-            if model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
-                self.model_combo.setCurrentText(model)
+            # Map API name back to display name for combo box
+            display_model = next((k for k, v in self.model_api_names.items() if v == model), "Gemini 1.5 Flash")
+            if display_model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
+                self.model_combo.setCurrentText(display_model)
             cache_mode = settings.get('cache_mode', 'RAM')
             if cache_mode in ["RAM", "File", "None"]:
                 self.cache_combo.setCurrentText(cache_mode)
@@ -156,9 +167,11 @@ class AdvancedSettingsDialog(QDialog):
             rpm = int(self.rpm_input.text())
             if rpm <= 0:
                 raise ValueError("RPM must be a positive number!")
+            model_display_name = self.model_combo.currentText()
+            model_api_name = self.model_api_names.get(model_display_name, "gemini-1.5-flash")
             config = {
                 "rpm": str(rpm),
-                "model": self.model_combo.currentText(),
+                "model": model_api_name,
                 "cache_mode": self.cache_combo.currentText(),
                 "batch_size": self.batch_size_combo.currentText()
             }
@@ -342,7 +355,7 @@ class SubtitleTranslatorApp(QWidget):
         self.initUI()
         self.config = self.load_config()
         self.translation_cache = self.load_translation_cache()
-        self.original_file_name = ""  # To store the original file name
+        self.original_file_name = ""
 
     def load_config(self):
         # Load configuration from SQLite, return defaults if not found
@@ -560,7 +573,7 @@ class SubtitleTranslatorApp(QWidget):
             options = QFileDialog.Options()
             file_path, _ = QFileDialog.getOpenFileName(self, "Select Subtitle File", "", "Subtitle Files (*.srt)", options=options)
             if file_path:
-                self.original_file_name = os.path.basename(file_path)  # Store the original file name
+                self.original_file_name = os.path.basename(file_path)
                 subs = pysrt.open(file_path)
                 if not subs:
                     raise ValueError("Empty or invalid subtitle file")
@@ -704,7 +717,7 @@ class SubtitleTranslatorApp(QWidget):
                 "Japanese": "ja"
             }
             target_language = self.language_combo.currentText()
-            lang_prefix = lang_codes.get(target_language, target_language.lower())  # Use short code if available, else full name
+            lang_prefix = lang_codes.get(target_language, target_language.lower())
             default_file_name = f"{lang_prefix}-{self.original_file_name}" if self.original_file_name else f"{lang_prefix}-translated.srt"
             
             file_path, _ = QFileDialog.getSaveFileName(self, "Save Translated Subtitle", default_file_name, "Subtitle Files (*.srt)")
