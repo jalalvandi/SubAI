@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 import os
 import json
@@ -16,7 +17,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Public Settings")
-        self.setGeometry(200, 200, 400, 250)
+        self.setGeometry(200, 200, 400, 200)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
         self.setWindowIcon(QIcon("logo.png"))
 
@@ -47,36 +48,36 @@ class SettingsDialog(QDialog):
         self.load_existing_settings()
 
     def load_existing_settings(self):
-        # Load existing API key and proxy settings from config.json
+        # Load existing API key and proxy settings from SQLite
         try:
-            if os.path.exists('config.json'):
-                with open('config.json', 'r') as config_file:
-                    config = json.load(config_file)
-                self.api_key_input.setText(config.get('api_key', ''))
-                if 'proxy' in config:
-                    self.http_proxy_input.setText(config['proxy'].get('http', ''))
-                    self.https_proxy_input.setText(config['proxy'].get('https', ''))
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings")
+            settings = dict(cursor.fetchall())
+            conn.close()
+            self.api_key_input.setText(settings.get('api_key', ''))
+            proxy = json.loads(settings.get('proxy', '{}'))
+            self.http_proxy_input.setText(proxy.get('http', ''))
+            self.https_proxy_input.setText(proxy.get('https', ''))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading settings: {str(e)}")
 
     def save_settings(self):
-        # Save API key and proxy settings to config.json
+        # Save API key and proxy settings to SQLite
         config = {
             "api_key": self.api_key_input.text(),
-            "proxy": {
+            "proxy": json.dumps({
                 "http": self.http_proxy_input.text(),
                 "https": self.https_proxy_input.text()
-            }
+            })
         }
         try:
-            with open('config.json', 'r') as config_file:
-                existing_config = json.load(config_file)
-            config.update({k: v for k, v in existing_config.items() if k not in config})
-        except FileNotFoundError:
-            pass
-        try:
-            with open('config.json', 'w') as config_file:
-                json.dump(config, config_file, indent=4)
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            for key, value in config.items():
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+            conn.close()
             QMessageBox.information(self, "Success", "Settings saved successfully!")
             self.accept()
         except Exception as e:
@@ -112,6 +113,13 @@ class AdvancedSettingsDialog(QDialog):
         self.cache_combo.setCurrentText("RAM")
         layout.addRow("Translation Cache:", self.cache_combo)
 
+        self.batch_size_combo = QComboBox(self)
+        self.batch_size_combo.setStyleSheet("background-color: #34495e; color: white; padding: 6px; border-radius: 5px;")
+        self.batch_size_combo.setFont(QFont("Tahoma", 10))
+        self.batch_size_combo.addItems(["1", "5", "10", "20", "30"])
+        self.batch_size_combo.setCurrentText("5")
+        layout.addRow("Translations per Request:", self.batch_size_combo)
+
         self.save_button = QPushButton("Save Advanced Settings")
         self.save_button.setFont(QFont("Tahoma", 10))
         self.save_button.setStyleSheet("background-color: #27ae60; color: white; padding: 10px; border-radius: 8px;")
@@ -122,51 +130,61 @@ class AdvancedSettingsDialog(QDialog):
         self.load_existing_settings()
 
     def load_existing_settings(self):
-        # Load advanced settings (RPM, model, cache mode) from config.json
+        # Load advanced settings (RPM, model, cache mode, batch size) from SQLite
         try:
-            if os.path.exists('config.json'):
-                with open('config.json', 'r') as config_file:
-                    config = json.load(config_file)
-                self.rpm_input.setText(str(config.get('rpm', 15)))
-                model = config.get('model', 'gemini-1.5-flash')
-                if model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
-                    self.model_combo.setCurrentText(model)
-                cache_mode = config.get('cache_mode', 'RAM')
-                if cache_mode in ["RAM", "File", "None"]:
-                    self.cache_combo.setCurrentText(cache_mode)
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings WHERE key IN ('rpm', 'model', 'cache_mode', 'batch_size')")
+            settings = dict(cursor.fetchall())
+            conn.close()
+            self.rpm_input.setText(settings.get('rpm', '15'))
+            model = settings.get('model', 'gemini-1.5-flash')
+            if model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
+                self.model_combo.setCurrentText(model)
+            cache_mode = settings.get('cache_mode', 'RAM')
+            if cache_mode in ["RAM", "File", "None"]:
+                self.cache_combo.setCurrentText(cache_mode)
+            batch_size = settings.get('batch_size', '5')
+            if batch_size in ["1", "5", "10", "20", "30"]:
+                self.batch_size_combo.setCurrentText(batch_size)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading advanced settings: {str(e)}")
 
     def save_settings(self):
-        # Save advanced settings to config.json and initialize cache file if 'File' mode is selected
+        # Save advanced settings to SQLite and initialize cache table if 'File' mode is selected
         try:
             rpm = int(self.rpm_input.text())
             if rpm <= 0:
                 raise ValueError("RPM must be a positive number!")
             config = {
-                "rpm": rpm,
+                "rpm": str(rpm),
                 "model": self.model_combo.currentText(),
-                "cache_mode": self.cache_combo.currentText()
+                "cache_mode": self.cache_combo.currentText(),
+                "batch_size": self.batch_size_combo.currentText()
             }
-            try:
-                with open('config.json', 'r') as config_file:
-                    existing_config = json.load(config_file)
-                config.update({k: v for k, v in existing_config.items() if k not in config})
-            except FileNotFoundError:
-                pass
-            with open('config.json', 'w') as config_file:
-                json.dump(config, config_file, indent=4)
-            
-            if self.cache_combo.currentText() == "File" and not os.path.exists('translation_cache.json'):
-                with open('translation_cache.json', 'w') as cache_file:
-                    json.dump({}, cache_file, indent=4)
-            
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            for key, value in config.items():
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+            conn.close()
+            if self.cache_combo.currentText() == "File":
+                self.ensure_cache_table_exists()
             QMessageBox.information(self, "Success", "Advanced settings saved successfully!")
             self.accept()
         except ValueError as e:
             QMessageBox.warning(self, "Error", str(e))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error saving advanced settings: {str(e)}")
+
+    def ensure_cache_table_exists(self):
+        # Ensure the translation_cache table exists in SQLite
+        conn = sqlite3.connect('subtitle_translator.db')
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS translation_cache 
+                          (cache_key TEXT PRIMARY KEY, translated_text TEXT)''')
+        conn.commit()
+        conn.close()
 
 class TranslationWorker(QThread):
     progress = pyqtSignal(int)
@@ -182,53 +200,118 @@ class TranslationWorker(QThread):
         self.start_row = start_row
         self.config = config
         self.model = genai.GenerativeModel(self.config.get('model', 'gemini-1.5-flash'))
-        self.rpm = self.config.get('rpm', 15)
+        self.rpm = int(self.config.get('rpm', '15'))
         self.delay = 60 / self.rpm
         self.is_canceled = False
         self.current_row = start_row
         self.cache_mode = self.config.get('cache_mode', 'RAM')
         self.translation_cache = translation_cache if translation_cache is not None else {}
+        self.batch_size = int(self.config.get('batch_size', '5'))
+        self.separator = "|||"
 
     def run(self):
-        # Main translation loop handling each subtitle row
+        # Main translation loop handling batches of subtitle rows
         try:
             total_rows = self.table.rowCount()
-            for row in range(self.start_row, total_rows):
+            for start_idx in range(self.start_row, total_rows, self.batch_size):
                 if self.is_canceled:
                     self.canceled.emit()
                     return
-                original_text = self.table.item(row, 1).text()
-                if original_text:
+                end_idx = min(start_idx + self.batch_size, total_rows)
+                batch_texts = [(row, self.table.item(row, 1).text()) for row in range(start_idx, end_idx) if self.table.item(row, 1)]
+                
+                if batch_texts:
                     if self.cache_mode != "None" and self.translation_cache is not None:
-                        cache_key = f"{self.target_language}:{original_text}"
-                        if cache_key in self.translation_cache:
-                            translated_text = self.translation_cache[cache_key]
-                        else:
-                            prompt = f"Translate this text to {self.target_language} and return only the translated text without any explanation or additional content: {original_text}"
+                        translated_texts = []
+                        uncached_texts = []
+                        uncached_indices = []
+                        for row, text in batch_texts:
+                            cache_key = f"{self.target_language}:{text}"
+                            if cache_key in self.translation_cache:
+                                translated_texts.append((row, self.translation_cache[cache_key]))
+                            else:
+                                uncached_texts.append((row, text))
+                                uncached_indices.append(row)
+                        
+                        if uncached_texts:
+                            prompt_lines = [f"{i+1}. {text}" for i, (_, text) in enumerate(uncached_texts)]
+                            prompt = (f"Translate these texts to {self.target_language} and return them numbered with '{self.separator}' as separator:\n"
+                                      f"Please ensure each translation is prefixed with its number and separated by '{self.separator}' exactly as requested.\n"
+                                      + "\n".join(prompt_lines))
                             try:
                                 response = self.model.generate_content(prompt)
-                                translated_text = response.text
-                            except (requests.exceptions.ConnectionError, Exception) as e:
+                                translated_response = response.text.strip().split(self.separator)
+                                # Flexible parsing of response
+                                response_dict = {}
+                                for line in translated_response:
+                                    if '.' in line:
+                                        try:
+                                            num, translated_text = line.split(".", 1)
+                                            num = int(num.strip()) - 1
+                                            response_dict[num] = translated_text.strip()
+                                        except ValueError:
+                                            continue  # Skip malformed lines
+                                
+                                for idx, (row, text) in enumerate(uncached_texts):
+                                    if idx in response_dict:
+                                        cache_key = f"{self.target_language}:{text}"
+                                        self.translation_cache[cache_key] = response_dict[idx]
+                                        translated_texts.append((row, response_dict[idx]))
+                                        if self.cache_mode == "File":
+                                            self.save_cache_to_file()
+                                    else:
+                                        self.error.emit(f"Translation incomplete: Missing translation for text '{text}'")
+                                        self.canceled.emit()
+                                        return
+                            except requests.exceptions.ConnectionError:
                                 self.error.emit("Internet connection lost. Translation stopped.")
                                 self.canceled.emit()
                                 return
-                            self.translation_cache[cache_key] = translated_text
-                            if self.cache_mode == "File":
-                                self.save_cache_to_file()
-                        self.translated.emit(row, translated_text)
+                            except Exception as e:
+                                self.error.emit(f"Translation failed: {str(e)}")
+                                self.canceled.emit()
+                                return
+                        
+                        for row, translated_text in translated_texts:
+                            self.translated.emit(row, translated_text)
                     else:
-                        prompt = f"Translate this text to {self.target_language} and return only the translated text without any explanation or additional content: {original_text}"
+                        prompt_lines = [f"{i+1}. {text}" for i, (_, text) in enumerate(batch_texts)]
+                        prompt = (f"Translate these texts to {self.target_language} and return them numbered with '{self.separator}' as separator:\n"
+                                  f"Please ensure each translation is prefixed with its number and separated by '{self.separator}' exactly as requested.\n"
+                                  + "\n".join(prompt_lines))
                         try:
                             response = self.model.generate_content(prompt)
-                            translated_text = response.text
-                        except (requests.exceptions.ConnectionError, Exception) as e:
+                            translated_response = response.text.strip().split(self.separator)
+                            # Flexible parsing of response
+                            response_dict = {}
+                            for line in translated_response:
+                                if '.' in line:
+                                    try:
+                                        num, translated_text = line.split(".", 1)
+                                        num = int(num.strip()) - 1
+                                        response_dict[num] = translated_text.strip()
+                                    except ValueError:
+                                        continue  # Skip malformed lines
+                            
+                            for idx, (row, text) in enumerate(batch_texts):
+                                if idx in response_dict:
+                                    self.translated.emit(row, response_dict[idx])
+                                else:
+                                    self.error.emit(f"Translation incomplete: Missing translation for text '{text}'")
+                                    self.canceled.emit()
+                                    return
+                        except requests.exceptions.ConnectionError:
                             self.error.emit("Internet connection lost. Translation stopped.")
                             self.canceled.emit()
                             return
-                        self.translated.emit(row, translated_text)
-                self.progress.emit(row + 1)
-                self.current_row = row + 1
-                if row < total_rows - 1:
+                        except Exception as e:
+                            self.error.emit(f"Translation failed: {str(e)}")
+                            self.canceled.emit()
+                            return
+                
+                self.progress.emit(end_idx)
+                self.current_row = end_idx
+                if end_idx < total_rows:
                     time.sleep(self.delay)
             self.finished.emit()
         except Exception as e:
@@ -239,10 +322,14 @@ class TranslationWorker(QThread):
         self.is_canceled = True
 
     def save_cache_to_file(self):
-        # Save translation cache to file in 'File' mode
+        # Save translation cache to SQLite in 'File' mode
         try:
-            with open('translation_cache.json', 'w', encoding='utf-8') as cache_file:
-                json.dump(self.translation_cache, cache_file, indent=4, ensure_ascii=False)
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            for key, value in self.translation_cache.items():
+                cursor.execute("INSERT OR REPLACE INTO translation_cache (cache_key, translated_text) VALUES (?, ?)", (key, value))
+            conn.commit()
+            conn.close()
         except Exception as e:
             QMessageBox.warning(None, "Error", f"Failed to save cache to file: {str(e)}")
 
@@ -251,62 +338,80 @@ class SubtitleTranslatorApp(QWidget):
         super().__init__()
         self.worker = None
         self.last_processed_row = 0
+        self.initialize_db()
         self.initUI()
         self.config = self.load_config()
         self.translation_cache = self.load_translation_cache()
+        self.original_file_name = ""  # To store the original file name
 
     def load_config(self):
-        # Load configuration from config.json or prompt for settings if not found
+        # Load configuration from SQLite, return defaults if not found
+        defaults = {
+            'rpm': '15',
+            'model': 'gemini-1.5-flash',
+            'cache_mode': 'RAM',
+            'batch_size': '5'
+        }
         try:
-            if not os.path.exists('config.json'):
-                self.open_settings_dialog()
-                return {}
-            with open('config.json', 'r') as config_file:
-                config = json.load(config_file)
+            conn = sqlite3.connect('subtitle_translator.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings")
+            config = dict(cursor.fetchall())
+            conn.close()
+            if not config.get('api_key'):
+                return defaults
             if 'proxy' in config:
-                if 'http' in config['proxy']:
-                    os.environ["HTTP_PROXY"] = config['proxy']['http']
-                if 'https' in config['proxy']:
-                    os.environ["HTTPS_PROXY"] = config['proxy']['https']
+                proxy = json.loads(config['proxy'])
+                if 'http' in proxy:
+                    os.environ["HTTP_PROXY"] = proxy['http']
+                if 'https' in proxy:
+                    os.environ["HTTPS_PROXY"] = proxy['https']
             api_key = config.get('api_key', '')
-            if not api_key:
-                raise ValueError("API key not found in config.json!")
             genai.configure(api_key=api_key)
             return config
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading configuration: {str(e)}")
-            self.open_settings_dialog()
-            return {}
+            return defaults
 
     def load_translation_cache(self):
-        # Load translation cache based on configured cache mode
+        # Load translation cache from SQLite based on configured cache mode
         cache_mode = self.config.get('cache_mode', 'RAM')
-        if cache_mode == "File" and os.path.exists('translation_cache.json'):
+        if cache_mode == "File" and os.path.exists('subtitle_translator.db'):
             try:
-                with open('translation_cache.json', 'r', encoding='utf-8') as cache_file:
-                    return json.load(cache_file)
+                conn = sqlite3.connect('subtitle_translator.db')
+                cursor = conn.cursor()
+                cursor.execute("SELECT cache_key, translated_text FROM translation_cache")
+                cache = dict(cursor.fetchall())
+                conn.close()
+                return cache
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Error loading cache from file: {str(e)}")
         return defaultdict(str) if cache_mode == "RAM" else {} if cache_mode == "File" else None
 
     def save_translation_cache(self):
-        # Save translation cache to file if configured for 'File' mode
+        # Save translation cache to SQLite if configured for 'File' mode
         if self.config.get('cache_mode', 'RAM') == "File" and self.translation_cache is not None:
             try:
-                with open('translation_cache.json', 'w', encoding='utf-8') as cache_file:
-                    json.dump(self.translation_cache, cache_file, indent=4, ensure_ascii=False)
+                conn = sqlite3.connect('subtitle_translator.db')
+                cursor = conn.cursor()
+                for key, value in self.translation_cache.items():
+                    cursor.execute("INSERT OR REPLACE INTO translation_cache (cache_key, translated_text) VALUES (?, ?)", (key, value))
+                conn.commit()
+                conn.close()
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Error saving cache to file: {str(e)}")
 
     def clear_cache(self):
-        # Clear the translation cache file if in 'File' mode
+        # Clear the translation cache in SQLite if in 'File' mode
         if self.config.get('cache_mode', 'RAM') == "File":
             try:
-                if os.path.exists('translation_cache.json'):
-                    with open('translation_cache.json', 'w', encoding='utf-8') as cache_file:
-                        json.dump({}, cache_file, indent=4)
-                    self.translation_cache = {}
-                    QMessageBox.information(self, "Success", "Translation cache cleared successfully!")
+                conn = sqlite3.connect('subtitle_translator.db')
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM translation_cache")
+                conn.commit()
+                conn.close()
+                self.translation_cache = {}
+                QMessageBox.information(self, "Success", "Translation cache cleared successfully!")
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Error clearing cache: {str(e)}")
 
@@ -422,12 +527,11 @@ class SubtitleTranslatorApp(QWidget):
         self.setLayout(main_layout)
 
     def reset_translation_state(self):
-        # Reset the translation state and UI elements
+        # Reset the translation state and UI elements, preserving last_processed_row
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
         self.worker = None
-        self.last_processed_row = 0
-        self.progress_bar.setValue(0)
+        self.progress_bar.setValue(self.last_processed_row)
         self.progress_bar.setVisible(False)
         self.btn_stop.setVisible(False)
         self.btn_resume.setVisible(False)
@@ -446,6 +550,7 @@ class SubtitleTranslatorApp(QWidget):
         # Open the advanced settings dialog
         dialog = AdvancedSettingsDialog(self)
         dialog.exec_()
+        self.config = self.load_config()
         self.translation_cache = self.load_translation_cache()
 
     def select_file(self):
@@ -455,6 +560,7 @@ class SubtitleTranslatorApp(QWidget):
             options = QFileDialog.Options()
             file_path, _ = QFileDialog.getOpenFileName(self, "Select Subtitle File", "", "Subtitle Files (*.srt)", options=options)
             if file_path:
+                self.original_file_name = os.path.basename(file_path)  # Store the original file name
                 subs = pysrt.open(file_path)
                 if not subs:
                     raise ValueError("Empty or invalid subtitle file")
@@ -464,12 +570,14 @@ class SubtitleTranslatorApp(QWidget):
                     self.table.setItem(i, 1, QTableWidgetItem(sub.text))
                     self.table.setItem(i, 2, QTableWidgetItem(""))
                 self.file_name_label.setText(f"Current file: {os.path.basename(file_path)}")
+                self.last_processed_row = 0  # Reset only when loading a new file
+                self.progress_bar.setMaximum(len(subs))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading subtitle file: {str(e)}")
             self.file_name_label.setText("No file selected")
 
     def translate_subtitle(self):
-        # Start the translation process
+        # Start the translation process from the beginning
         if self.worker and self.worker.isRunning():
             return
 
@@ -490,7 +598,7 @@ class SubtitleTranslatorApp(QWidget):
         self.btn_translate.setEnabled(False)
         self.btn_translate.setStyleSheet("background-color: #7f8c8d; color: white; padding: 12px; border-radius: 8px;")
 
-        self.worker = TranslationWorker(self.table, target_language, config=self.config, translation_cache=self.translation_cache)
+        self.worker = TranslationWorker(self.table, target_language, 0, config=self.config, translation_cache=self.translation_cache)
         self.worker.progress.connect(self.update_progress)
         self.worker.translated.connect(self.update_translation)
         self.worker.finished.connect(self.on_translation_finished)
@@ -512,7 +620,7 @@ class SubtitleTranslatorApp(QWidget):
         self.progress_bar.setFormat(f"Translating: %v/{total_rows}")
         self.btn_stop.setVisible(True)
         self.btn_resume.setVisible(False)
-        self.btn_save_partial.setVisible(False)
+        self.btn_save_partial.setVisible(True)
         self.btn_translate.setEnabled(False)
         self.btn_translate.setStyleSheet("background-color: #7f8c8d; color: white; padding: 12px; border-radius: 8px;")
 
@@ -529,6 +637,12 @@ class SubtitleTranslatorApp(QWidget):
         if self.worker:
             self.worker.cancel()
             self.last_processed_row = self.worker.current_row
+            self.progress_bar.setVisible(True)
+            self.btn_stop.setVisible(False)
+            self.btn_resume.setVisible(True)
+            self.btn_save_partial.setVisible(True)
+            self.btn_translate.setEnabled(True)
+            self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
             if self.config.get('cache_mode', 'RAM') == "File":
                 self.save_translation_cache()
 
@@ -566,21 +680,34 @@ class SubtitleTranslatorApp(QWidget):
         self.worker = None
 
     def on_translation_error(self, error_message):
-        # Handle errors during translation process
-        self.progress_bar.setVisible(False)
+        # Handle errors during translation process without resetting last_processed_row
+        self.progress_bar.setVisible(True)
         self.btn_stop.setVisible(False)
-        self.btn_resume.setVisible(False)
-        self.btn_save_partial.setVisible(False)
+        self.btn_resume.setVisible(True)
+        self.btn_save_partial.setVisible(True)
         self.btn_translate.setEnabled(True)
         self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
         QMessageBox.warning(self, "Error", error_message)
         self.worker = None
-        self.last_processed_row = 0
 
     def save_translated_file(self):
-        # Save the translated subtitles to an SRT file
+        # Save the translated subtitles to an SRT file with a default name based on target language
         try:
-            file_path, _ = QFileDialog.getSaveFileName(self, "Save Translated Subtitle", "", "Subtitle Files (*.srt)")
+            # Define language codes for shorter prefixes
+            lang_codes = {
+                "English": "en",
+                "French": "fr",
+                "German": "de",
+                "Spanish": "es",
+                "Persian": "fa",
+                "Chinese": "zh",
+                "Japanese": "ja"
+            }
+            target_language = self.language_combo.currentText()
+            lang_prefix = lang_codes.get(target_language, target_language.lower())  # Use short code if available, else full name
+            default_file_name = f"{lang_prefix}-{self.original_file_name}" if self.original_file_name else f"{lang_prefix}-translated.srt"
+            
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save Translated Subtitle", default_file_name, "Subtitle Files (*.srt)")
             if file_path:
                 subs = pysrt.SubRipFile()
                 for row in range(self.table.rowCount()):
@@ -593,6 +720,17 @@ class SubtitleTranslatorApp(QWidget):
                 QMessageBox.information(self, "Success", "Translated file saved successfully!")
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error saving file: {str(e)}")
+
+    def initialize_db(self):
+        # Initialize SQLite database with settings and translation_cache tables
+        conn = sqlite3.connect('subtitle_translator.db')
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS settings 
+                          (key TEXT PRIMARY KEY, value TEXT)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS translation_cache 
+                          (cache_key TEXT PRIMARY KEY, translated_text TEXT)''')
+        conn.commit()
+        conn.close()
 
 if __name__ == "__main__":
     # Main entry point for the application
