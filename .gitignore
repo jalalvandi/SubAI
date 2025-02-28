@@ -1,2 +1,5 @@
 subtitle_translator.db
 config.json
+build/
+dist/
+SubAI.spec

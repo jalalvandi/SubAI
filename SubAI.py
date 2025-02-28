@@ -7,11 +7,18 @@ import requests
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, 
                              QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QProgressBar, QDialog, 
                              QLineEdit, QFormLayout, QHBoxLayout)
-from PyQt5.QtGui import QFont, QPalette, QColor, QIcon
+from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 import pysrt
 import google.generativeai as genai
 from collections import defaultdict
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and PyInstaller"""
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
@@ -19,7 +26,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Public Settings")
         self.setGeometry(200, 200, 400, 200)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
-        self.setWindowIcon(QIcon("logo.png"))
+        self.setWindowIcon(QIcon(resource_path("logo.png")))
 
         layout = QFormLayout()
 
@@ -48,7 +55,6 @@ class SettingsDialog(QDialog):
         self.load_existing_settings()
 
     def load_existing_settings(self):
-        # Load existing API key and proxy settings from SQLite
         try:
             conn = sqlite3.connect('subtitle_translator.db')
             cursor = conn.cursor()
@@ -63,7 +69,6 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Error loading settings: {str(e)}")
 
     def save_settings(self):
-        # Save API key and proxy settings to SQLite
         config = {
             "api_key": self.api_key_input.text(),
             "proxy": json.dumps({
@@ -89,8 +94,8 @@ class AdvancedSettingsDialog(QDialog):
         self.setWindowTitle("Advanced Settings")
         self.setGeometry(200, 200, 400, 250)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
-        if os.path.exists("logo.png"):
-            self.setWindowIcon(QIcon("logo.png"))
+        if os.path.exists(resource_path("logo.png")):
+            self.setWindowIcon(QIcon(resource_path("logo.png")))
 
         layout = QFormLayout()
 
@@ -103,7 +108,6 @@ class AdvancedSettingsDialog(QDialog):
         self.model_combo = QComboBox(self)
         self.model_combo.setStyleSheet("background-color: #34495e; color: white; padding: 6px; border-radius: 5px;")
         self.model_combo.setFont(QFont("Tahoma", 10))
-        # Display names for user, mapped to API-compatible names
         self.model_display_names = [
             "Gemini 1.5 Flash",
             "Gemini 2.0 Flash"
@@ -139,7 +143,6 @@ class AdvancedSettingsDialog(QDialog):
         self.load_existing_settings()
 
     def load_existing_settings(self):
-        # Load advanced settings (RPM, model, cache mode, batch size) from SQLite
         try:
             conn = sqlite3.connect('subtitle_translator.db')
             cursor = conn.cursor()
@@ -148,7 +151,6 @@ class AdvancedSettingsDialog(QDialog):
             conn.close()
             self.rpm_input.setText(settings.get('rpm', '15'))
             model = settings.get('model', 'gemini-1.5-flash')
-            # Map API name back to display name for combo box
             display_model = next((k for k, v in self.model_api_names.items() if v == model), "Gemini 1.5 Flash")
             if display_model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
                 self.model_combo.setCurrentText(display_model)
@@ -162,7 +164,6 @@ class AdvancedSettingsDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Error loading advanced settings: {str(e)}")
 
     def save_settings(self):
-        # Save advanced settings to SQLite and initialize cache table if 'File' mode is selected
         try:
             rpm = int(self.rpm_input.text())
             if rpm <= 0:
@@ -191,7 +192,6 @@ class AdvancedSettingsDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Error saving advanced settings: {str(e)}")
 
     def ensure_cache_table_exists(self):
-        # Ensure the translation_cache table exists in SQLite
         conn = sqlite3.connect('subtitle_translator.db')
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS translation_cache 
@@ -223,7 +223,6 @@ class TranslationWorker(QThread):
         self.separator = "|||"
 
     def run(self):
-        # Main translation loop handling batches of subtitle rows
         try:
             total_rows = self.table.rowCount()
             for start_idx in range(self.start_row, total_rows, self.batch_size):
@@ -254,7 +253,6 @@ class TranslationWorker(QThread):
                             try:
                                 response = self.model.generate_content(prompt)
                                 translated_response = response.text.strip().split(self.separator)
-                                # Flexible parsing of response
                                 response_dict = {}
                                 for line in translated_response:
                                     if '.' in line:
@@ -263,7 +261,7 @@ class TranslationWorker(QThread):
                                             num = int(num.strip()) - 1
                                             response_dict[num] = translated_text.strip()
                                         except ValueError:
-                                            continue  # Skip malformed lines
+                                            continue
                                 
                                 for idx, (row, text) in enumerate(uncached_texts):
                                     if idx in response_dict:
@@ -295,7 +293,6 @@ class TranslationWorker(QThread):
                         try:
                             response = self.model.generate_content(prompt)
                             translated_response = response.text.strip().split(self.separator)
-                            # Flexible parsing of response
                             response_dict = {}
                             for line in translated_response:
                                 if '.' in line:
@@ -304,7 +301,7 @@ class TranslationWorker(QThread):
                                         num = int(num.strip()) - 1
                                         response_dict[num] = translated_text.strip()
                                     except ValueError:
-                                        continue  # Skip malformed lines
+                                        continue
                             
                             for idx, (row, text) in enumerate(batch_texts):
                                 if idx in response_dict:
@@ -331,11 +328,9 @@ class TranslationWorker(QThread):
             self.error.emit(f"Error during translation: {str(e)}")
 
     def cancel(self):
-        # Manually cancel the translation process
         self.is_canceled = True
 
     def save_cache_to_file(self):
-        # Save translation cache to SQLite in 'File' mode
         try:
             conn = sqlite3.connect('subtitle_translator.db')
             cursor = conn.cursor()
@@ -358,7 +353,6 @@ class SubtitleTranslatorApp(QWidget):
         self.original_file_name = ""
 
     def load_config(self):
-        # Load configuration from SQLite, return defaults if not found
         defaults = {
             'rpm': '15',
             'model': 'gemini-1.5-flash',
@@ -387,7 +381,6 @@ class SubtitleTranslatorApp(QWidget):
             return defaults
 
     def load_translation_cache(self):
-        # Load translation cache from SQLite based on configured cache mode
         cache_mode = self.config.get('cache_mode', 'RAM')
         if cache_mode == "File" and os.path.exists('subtitle_translator.db'):
             try:
@@ -402,7 +395,6 @@ class SubtitleTranslatorApp(QWidget):
         return defaultdict(str) if cache_mode == "RAM" else {} if cache_mode == "File" else None
 
     def save_translation_cache(self):
-        # Save translation cache to SQLite if configured for 'File' mode
         if self.config.get('cache_mode', 'RAM') == "File" and self.translation_cache is not None:
             try:
                 conn = sqlite3.connect('subtitle_translator.db')
@@ -415,7 +407,6 @@ class SubtitleTranslatorApp(QWidget):
                 QMessageBox.warning(self, "Error", f"Error saving cache to file: {str(e)}")
 
     def clear_cache(self):
-        # Clear the translation cache in SQLite if in 'File' mode
         if self.config.get('cache_mode', 'RAM') == "File":
             try:
                 conn = sqlite3.connect('subtitle_translator.db')
@@ -429,18 +420,15 @@ class SubtitleTranslatorApp(QWidget):
                 QMessageBox.warning(self, "Error", f"Error clearing cache: {str(e)}")
 
     def initUI(self):
-        # Initialize the main window UI
         self.setWindowTitle("Subtitle Translator")
         self.setGeometry(0, 0, 800, 550)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
-        if os.path.exists("logo.png"):
-            self.setWindowIcon(QIcon("logo.png"))
+        if os.path.exists(resource_path("logo.png")):
+            self.setWindowIcon(QIcon(resource_path("logo.png")))
 
-        # Center the window on the screen
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
 
-        # Top menu bar with buttons aligned to the right
         menu_layout = QHBoxLayout()
         menu_layout.addStretch()
 
@@ -462,7 +450,6 @@ class SubtitleTranslatorApp(QWidget):
         self.clear_cache_button.clicked.connect(self.clear_cache)
         menu_layout.addWidget(self.clear_cache_button)
 
-        # Main layout
         main_layout = QVBoxLayout()
         main_layout.addLayout(menu_layout)
 
@@ -540,7 +527,6 @@ class SubtitleTranslatorApp(QWidget):
         self.setLayout(main_layout)
 
     def reset_translation_state(self):
-        # Reset the translation state and UI elements, preserving last_processed_row
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
         self.worker = None
@@ -553,21 +539,18 @@ class SubtitleTranslatorApp(QWidget):
         self.btn_translate.setStyleSheet("background-color: #27ae60; color: white; padding: 12px; border-radius: 8px;")
 
     def open_settings_dialog(self):
-        # Open the public settings dialog
         dialog = SettingsDialog(self)
         dialog.exec_()
         self.config = self.load_config()
         self.translation_cache = self.load_translation_cache()
 
     def open_advanced_settings_dialog(self):
-        # Open the advanced settings dialog
         dialog = AdvancedSettingsDialog(self)
         dialog.exec_()
         self.config = self.load_config()
         self.translation_cache = self.load_translation_cache()
 
     def select_file(self):
-        # Select and load an SRT file into the table
         self.reset_translation_state()
         try:
             options = QFileDialog.Options()
@@ -583,14 +566,13 @@ class SubtitleTranslatorApp(QWidget):
                     self.table.setItem(i, 1, QTableWidgetItem(sub.text))
                     self.table.setItem(i, 2, QTableWidgetItem(""))
                 self.file_name_label.setText(f"Current file: {os.path.basename(file_path)}")
-                self.last_processed_row = 0  # Reset only when loading a new file
+                self.last_processed_row = 0
                 self.progress_bar.setMaximum(len(subs))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Error loading subtitle file: {str(e)}")
             self.file_name_label.setText("No file selected")
 
     def translate_subtitle(self):
-        # Start the translation process from the beginning
         if self.worker and self.worker.isRunning():
             return
 
@@ -620,7 +602,6 @@ class SubtitleTranslatorApp(QWidget):
         self.worker.start()
 
     def resume_translation(self):
-        # Resume the translation process from the last processed row
         if self.worker and self.worker.isRunning():
             return
 
@@ -646,7 +627,6 @@ class SubtitleTranslatorApp(QWidget):
         self.worker.start()
 
     def stop_translation(self):
-        # Stop the ongoing translation process
         if self.worker:
             self.worker.cancel()
             self.last_processed_row = self.worker.current_row
@@ -660,15 +640,12 @@ class SubtitleTranslatorApp(QWidget):
                 self.save_translation_cache()
 
     def update_progress(self, value):
-        # Update the progress bar value
         self.progress_bar.setValue(value)
 
     def update_translation(self, row, text):
-        # Update the translated text in the table
         self.table.setItem(row, 2, QTableWidgetItem(text))
 
     def on_translation_finished(self):
-        # Handle successful completion of translation
         self.progress_bar.setVisible(False)
         self.btn_stop.setVisible(False)
         self.btn_resume.setVisible(False)
@@ -683,7 +660,6 @@ class SubtitleTranslatorApp(QWidget):
             self.save_translation_cache()
 
     def on_translation_canceled(self):
-        # Handle cancellation of translation process
         self.progress_bar.setVisible(True)
         self.btn_stop.setVisible(False)
         self.btn_resume.setVisible(True)
@@ -693,7 +669,6 @@ class SubtitleTranslatorApp(QWidget):
         self.worker = None
 
     def on_translation_error(self, error_message):
-        # Handle errors during translation process without resetting last_processed_row
         self.progress_bar.setVisible(True)
         self.btn_stop.setVisible(False)
         self.btn_resume.setVisible(True)
@@ -704,9 +679,7 @@ class SubtitleTranslatorApp(QWidget):
         self.worker = None
 
     def save_translated_file(self):
-        # Save the translated subtitles to an SRT file with a default name based on target language
         try:
-            # Define language codes for shorter prefixes
             lang_codes = {
                 "English": "en",
                 "French": "fr",
@@ -735,7 +708,6 @@ class SubtitleTranslatorApp(QWidget):
             QMessageBox.warning(self, "Error", f"Error saving file: {str(e)}")
 
     def initialize_db(self):
-        # Initialize SQLite database with settings and translation_cache tables
         conn = sqlite3.connect('subtitle_translator.db')
         cursor = conn.cursor()
         cursor.execute('''CREATE TABLE IF NOT EXISTS settings 
@@ -746,7 +718,6 @@ class SubtitleTranslatorApp(QWidget):
         conn.close()
 
 if __name__ == "__main__":
-    # Main entry point for the application
     app = QApplication(sys.argv)
     window = SubtitleTranslatorApp()
     window.show()

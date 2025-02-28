@@ -1,42 +1,49 @@
-# Subtitle Translator
+# SubAI
 
-A PyQt5-based application for translating subtitle files (`.srt`) using Google's Generative AI (Gemini). This tool allows you to load subtitle files, translate them into various languages, and save the translated subtitles to a new file.
-
----
+SubAI is a subtitle translation application that leverages the power of AI to translate subtitles into various languages. The application is built using Python and PyQt5 for the GUI, and it integrates with Google's Generative AI for translation.
 
 ## Features
 
-- **Load Subtitle Files**: Open `.srt` files and display the subtitles in a table.
-- **Translate Subtitles**: Translate subtitles into multiple languages using Google's Gemini API.
-- **Save Translated Subtitles**: Save the translated subtitles to a new `.srt` file.
-- **Settings Management**: Configure your Google API key and proxy settings (HTTP/HTTPS).
-- **User-Friendly Interface**: Simple and intuitive GUI for easy navigation.
-
----
+- Load and translate subtitle files (.srt)
+- Save translated subtitles
+- Cache translations for faster processing
+- Configurable settings for translation parameters
+- User-friendly GUI
 
 ## Requirements
 
-- Python 3.7 or higher
-- Required Python libraries:
-  - `PyQt5`
-  - `pysrt`
-  - `google-generativeai`
-
----
+- Python 3.10
+- PyQt5
+- pysrt
+- requests
+- google-generativeai
 
 ## Installation
 
-1. **Clone the Repository**:
-   ```bash
-   git clone https://github.com/jalalvandi/subtitle-translator.git
-   cd subtitle-translator
-   ```
-2. **Install Dependencies:**:   
-   ```bash
-    pip install PyQt5 pysrt google-generativeai
-   ``` 
-3. **Run the Application:**:
-   ```bash
-   python subtitle_translator.py
-   ```
-      
+1. Clone the repository:
+    ```sh
+    git clone https://github.com/jalalvandi/SubAI.git
+    cd SubAI
+    ```
+
+2. Install the required packages:
+    ```sh
+    pip install -r requirements.txt
+    ```
+
+## Usage
+
+1. Run the application:
+    ```sh
+    python SubAI.py
+    ```
+
+2. Use the GUI to load a subtitle file, configure settings, and start the translation process.
+
+## Configuration
+
+The application uses a SQLite database (`subtitle_translator.db`) to store settings and translation cache.
+
+## License
+
+This project is licensed under the MIT License. See the LICENSE file for details.
